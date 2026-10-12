@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>深井｜回合制地下城</title>
+<style>
+*{box-sizing:border-box}
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101512;color:#e2e9dc}
+body{margin:0;min-height:100svh;display:grid;place-items:center;padding:24px 14px;background:radial-gradient(ellipse at top,#263427,#101512 65%)}
+main{width:min(100%,640px)}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+h1{font-size:32px;letter-spacing:5px;margin:5px 0} .eyebrow{font-size:11px;letter-spacing:3px;color:#b9cf83}
+.tag{font-size:12px;border:1px solid #46533c;border-radius:20px;padding:7px 12px;color:#b9cf83}
+.intro{font-size:14px;color:#a9b5a2;line-height:1.8}
+.stats{display:flex;justify-content:space-between;gap:8px;margin:22px 0 12px;font-size:13px;color:#b9c4af}
+.stats b{color:#e3edce;font-variant-numeric:tabular-nums}
+.frame{background:#080d0b;border:1px solid #45503b;border-radius:12px;padding:12px;box-shadow:0 20px 60px #0005}
+#board{display:grid;grid-template-columns:repeat(17,minmax(0,1fr));gap:2px;outline:none}
+#board:focus-visible{outline:2px solid #cbe49d;outline-offset:5px}
+.cell{aspect-ratio:1;display:grid;place-items:center;font:700 clamp(11px,3.5vw,23px)/1 ui-monospace,SFMono-Regular,Consolas,monospace;border-radius:3px;color:#394638;user-select:none}
+.wall{background:#202b22;color:#5c7054}.player{background:#ff9999;color:#101512;animation:rainbow 6s linear infinite;box-shadow:0 0 15px #ffffff35}.enemy{color:#ffa38d;background:#47261e}.exit{color:#eacf85;background:#3a3420}.floor{color:#344034}.spring{color:#9deeff;background:#163d46;text-shadow:0 0 9px #76e4ff}
+@keyframes rainbow{0%,100%{background-color:#ff9999}16.67%{background-color:#ffd099}33.33%{background-color:#ffff99}50%{background-color:#99ffbb}66.67%{background-color:#99ccff}83.33%{background-color:#dd99ff}}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin:14px 0;color:#a9b5a2}
+.legend strong{font-family:monospace;color:#d2e6a9}
+#message{min-height:56px;margin:16px 0 8px;padding:12px 14px;border-left:2px solid #bed48f;background:#1a231a;font-size:14px;line-height:1.6}
+.controls{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-top:20px}
+.pad{display:grid;grid-template-columns:repeat(3,48px);gap:6px}
+button{font:inherit;cursor:pointer;border:1px solid #46523d;border-radius:8px;background:#263123;color:#e2e9dc;min-height:46px;touch-action:manipulation}
+button:hover{background:#38462d}button:active{transform:translateY(1px)}button:focus-visible{outline:2px solid #d2e6a9;outline-offset:3px}button:disabled{opacity:.4;cursor:default}
+.up{grid-column:2}.left{grid-column:1}.down{grid-column:2}.right{grid-column:3}
+.actions{display:grid;gap:10px}#restart{padding:0 18px}.hint{font-size:12px;color:#92a088;line-height:1.8;text-align:right}
+footer{margin-top:24px;text-align:center;color:#829179;font-size:11px;letter-spacing:2px}
+@media(max-width:380px){.frame{padding:7px}#board{gap:1px}.legend{gap:9px}.stats{font-size:12px}}
+</style>
+</head>
+<body>
+<main>
+  <header><div><div class="eyebrow">THE DEEP WELL / THREE DEPTHS</div><h1>深井</h1></div><span class="tag">回合制地下城</span></header>
+  <p class="intro">深入三層地牢，生命值跨層保留。利用治療泉水，在最深處找到出口。</p>
+  <div class="stats"><span>樓層 <b id="level"></b></span><span>生命 <b id="hp"></b></span><span>回合 <b id="turn">0</b></span><span>敵人 <b id="remaining"></b></span></div>
+  <div class="frame"><div id="board" tabindex="0" role="img" aria-label="地下城地圖"></div></div>
+  <div class="legend"><span><strong>@</strong> 你</span><span><strong>#</strong> 牆</span><span><strong>G</strong> 守衛</span><span><strong>&gt;</strong> 下樓／出口</span><span><strong>~</strong> 治療泉水</span><span>· 通道</span></div>
+  <p id="message" role="status" aria-live="polite"></p>
+  <div class="controls">
+    <div class="pad" aria-label="方向控制">
+      <button class="up" data-dir="0,-1" aria-label="向上">↑</button>
+      <button class="left" data-dir="-1,0" aria-label="向左">←</button>
+      <button class="down" data-dir="0,1" aria-label="向下">↓</button>
+      <button class="right" data-dir="1,0" aria-label="向右">→</button>
+    </div>
+    <div class="actions"><button id="restart">重新開始 ↺</button><div class="hint">WASD / 方向鍵 / 觸控<br>走向守衛攻擊 · 撞牆不扣回合</div></div>
+  </div>
+  <p class="intro">泉水 ~：恢復所有缺少的 HP（上限 8），每座限用一次；滿血時不消耗。先治療，再輪到敵人行動。</p><footer>一步，一個決定。</footer>
+</main>
+<script>
+'use strict';
+// 所有圖像、樣式、地圖與邏輯均在本檔，無外部依賴。
+const MAX_HP = 8;
+const levels = [
+  {name:'苔石入口', enemyHP:2, layout:[
+    '#################',
+    '#@......#......>#',
+    '#.###.#.#.#####.#',
+    '#...#.#.~.#.....#',
+    '###.#.#####.###.#',
+    '#...#...G...#...#',
+    '#.#####.###.#.#.#',
+    '#.....#...#...#.#',
+    '#.###.###.#####.#',
+    '#...#...G.......#',
+    '#################'
+  ]},
+  {name:'迴聲迴廊', enemyHP:2, layout:[
+    '#################',
+    '#@.G#.....#....>#',
+    '#.#.#.###.#.###.#',
+    '#.#...#...#...#.#',
+    '#.#####.#####.#.#',
+    '#...~...G.....#.#',
+    '###.###.###.#.#.#',
+    '#...#...#...#...#',
+    '#.###.###.#####.#',
+    '#.......#...G...#',
+    '#################'
+  ]},
+  {name:'深井核心', enemyHP:3, layout:[
+    '#################',
+    '#@..G.#.......~>#',
+    '#.###.#.#######.#',
+    '#...#~..G...#...#',
+    '###.#######.#.#.#',
+    '#.........#...#.#',
+    '#.#####.#.#####.#',
+    '#...G...#...G...#',
+    '#.###.#####.###.#',
+    '#...#...........#',
+    '#################'
+  ]}
+];
+const board = document.getElementById('board');
+const message = document.getElementById('message');
+const directions = [[0,-1],[-1,0],[0,1],[1,0]];
+let map, player, enemies, turns, ended, levelIndex;
+function loadLevel(index) {
+  levelIndex = index;
+  const level = levels[index];
+  map = level.layout.map(row => row.split(''));
+  enemies = [];
+  map.forEach((row,y) => row.forEach((tile,x) => {
+    if (tile === '@') { player.x=x; player.y=y; map[y][x]='.'; }
+    if (tile === 'G') { enemies.push({x,y,hp:level.enemyHP}); map[y][x]='.'; }
+  }));
+}
+function reset() {
+  player = {x:0,y:0,hp:MAX_HP};
+  turns = 0; ended = false;
+  loadLevel(0);
+  message.textContent = '第 1 層：苔石入口。找到 > 前往下一層。守衛有 2 HP，你每次攻擊造成 1 點傷害。';
+  render();
+}
+function passable(x,y) { return !!map[y] && map[y][x] !== undefined && map[y][x] !== '#'; }
+function distance(a,b) { return Math.abs(a.x-b.x) + Math.abs(a.y-b.y); }
+function render() {
+  const fragment = document.createDocumentFragment();
+  map.forEach((row,y) => row.forEach((tile,x) => {
+    const cell = document.createElement('span');
+    let symbol = tile === '.' ? '·' : tile;
+    let type = tile === '#' ? 'wall' : tile === '>' ? 'exit' : tile === '~' ? 'spring' : 'floor';
+    const enemy = enemies.find(e => e.x === x && e.y === y);
+    if (enemy) {symbol = 'G'; type = 'enemy';}
+    if (player.x === x && player.y === y) {symbol = '@'; type = 'player';}
+    cell.className = 'cell ' + type;
+    // 重新繪製地圖時延續彩虹週期，移動不會讓顏色從頭開始。
+    if (type === 'player') cell.style.animationDelay = '-' + (performance.now() % 6000) + 'ms';
+    cell.textContent = symbol;
+    cell.setAttribute('aria-hidden','true');
+    cell.title = enemy ? '守衛：' + enemy.hp + ' HP' : tile === '~' ? '治療泉水：回滿 HP，每座限用一次' : symbol;
+    fragment.appendChild(cell);
+  }));
+  board.replaceChildren(fragment);
+  board.setAttribute('aria-label', '地下城地圖，玩家位於第 ' + (player.y+1) + ' 列、第 ' + (player.x+1) + ' 欄。');
+  document.getElementById('hp').textContent = player.hp + ' / ' + MAX_HP;
+  document.getElementById('turn').textContent = turns;
+  document.getElementById('level').textContent = (levelIndex+1) + ' / ' + levels.length;
+  document.querySelector('.tag').textContent = levels[levelIndex].name;
+  document.getElementById('remaining').textContent = enemies.length;
+  document.querySelectorAll('[data-dir]').forEach(button => button.disabled = ended);
+}
+// 廣度優先搜尋最短路，牆與其他敵人皆不可穿越。
+function nextStep(enemy) {
+  const queue = [{x:enemy.x,y:enemy.y,first:null}];
+  const seen = new Set([enemy.x + ',' + enemy.y]);
+  for (let i=0; i<queue.length; i++) {
+    const current = queue[i];
+    for (const [dx,dy] of directions) {
+      const x = current.x+dx, y = current.y+dy, key = x+','+y;
+      if (!passable(x,y) || seen.has(key)) continue;
+      if (enemies.some(e => e !== enemy && e.x === x && e.y === y)) continue;
+      const first = current.first || {x,y};
+      if (x === player.x && y === player.y) return first;
+      seen.add(key); queue.push({x,y,first});
+    }
+  }
+  return null;
+}
+function move(dx,dy) {
+  if (ended) return;
+  const x = player.x+dx, y = player.y+dy;
+  if (!passable(x,y)) {
+    message.textContent = '石牆擋住去路。請換個方向；沒有消耗回合。';
+    return;
+  }
+  turns++;
+  const events = [];
+  const target = enemies.find(e => e.x === x && e.y === y);
+  if (target) {
+    target.hp--;
+    if (target.hp <= 0) {
+      enemies = enemies.filter(e => e !== target);
+      events.push('擊敗守衛！');
+    } else events.push('擊中守衛，剩餘 ' + target.hp + ' 點生命。');
+  } else {
+    player.x = x; player.y = y;
+    events.push('你向前探索。');
+  }
+  // 泉水先治療，再執行敵人回合；滿血時保留泉水。
+  if (map[player.y][player.x] === '~') {
+    const healed = MAX_HP-player.hp;
+    if (healed > 0) {
+      player.hp = MAX_HP;
+      map[player.y][player.x] = '.';
+      events.push('泉水恢復 ' + healed + ' HP，已回滿！這座泉水乾涸了。');
+    } else events.push('目前滿血，泉水保留供下次使用。');
+  }
+  // 前兩層的出口是樓梯；跨層保留 HP 與總回合數。
+  if (map[player.y][player.x] === '>') {
+    if (levelIndex < levels.length-1) {
+      loadLevel(levelIndex+1);
+      message.textContent = '抵達第 ' + (levelIndex+1) + ' 層：' + levels[levelIndex].name +
+        '。生命保留 ' + player.hp + ' / ' + MAX_HP + '；本層 ' + enemies.length +
+        ' 名守衛，各有 ' + levels[levelIndex].enemyHP + ' HP。';
+    } else {
+      ended = true;
+      message.textContent = '成功突破三層，逃出深井！共 ' + turns + ' 回合，剩餘 ' + player.hp + ' HP。';
+    }
+    render(); return;
+  }
+  for (const enemy of enemies) {
+    if (distance(enemy,player) === 1) {
+      player.hp = Math.max(0,player.hp-1);
+      events.push('守衛攻擊你，失去 1 點生命。');
+    } else {
+      const step = nextStep(enemy);
+      if (step) {enemy.x = step.x; enemy.y = step.y;}
+      // 移動與攻擊擇一，敵人移動後不會再攻擊。
+    }
+    if (player.hp === 0) {
+      ended = true;
+      events.push('你倒在深井中。按「重新開始」再次挑戰。');
+      break;
+    }
+  }
+  message.textContent = events.join(' ');
+  render();
+}
+const keys = {w:[0,-1],a:[-1,0],s:[0,1],d:[1,0],ArrowUp:[0,-1],ArrowLeft:[-1,0],ArrowDown:[0,1],ArrowRight:[1,0]};
+document.addEventListener('keydown', event => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const direction = keys[event.key] || keys[event.key.toLowerCase()];
+  if (!direction) return;
+  event.preventDefault();
+  if (!event.repeat) move(...direction);
+});
+document.querySelectorAll('[data-dir]').forEach(button => {
+  // 原生 click 同時支援滑鼠、觸控及鍵盤，不會重複觸發。
+  button.addEventListener('click', () => move(...button.dataset.dir.split(',').map(Number)));
+});
+document.getElementById('restart').addEventListener('click',reset);
+reset();
+</script>
+</body>
+</html>
